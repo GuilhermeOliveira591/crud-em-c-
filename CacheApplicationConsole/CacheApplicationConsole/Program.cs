@@ -24,6 +24,7 @@ namespace CacheApplicationConsole
             string redisConnectionString = "localhost:6379,allowAdmin=true,password=123456";
             ConnectionMultiplexer redis = ConnectionMultiplexer.Connect(redisConnectionString);
             IDatabase redisDatabase = redis.GetDatabase();
+            
 
             static async Task ConsultarPessoaPorIdEAdicionarAoRedis(string sqlConnectionString, string redisConnectionString, int id, IDatabase redisDatabase)
             {
@@ -92,7 +93,6 @@ namespace CacheApplicationConsole
                     var query = $"SELECT CPF FROM Pessoa WHERE CPF = @CPF AND Ativo = 1";
                     var pessoa = sqlDatabase.QueryFirstOrDefault<Pessoa>(query, new { CPF = cpf});
 
-
                     if (pessoa == null)
                     {
                         return cpf;
@@ -102,6 +102,24 @@ namespace CacheApplicationConsole
                         return "";
                     }
                 }
+            }
+
+            static int ObterNumeroPagina(IDatabase redisDatabase, string listaKey, string campoOrdenacao, int valorBuscado, int pageSize)
+            {
+                RedisValue[] rangeList = redisDatabase.ListRange(listaKey, 0, -1);
+
+                for (long indice = 0; indice < rangeList.Length; indice++)
+                {
+                    string valor = rangeList[indice];
+
+                    // Verificar se o JSON contém o ID desejado
+                    if (valor.Contains($"\"{campoOrdenacao}\":{valorBuscado}"))
+                    {
+                        int pageNumber = (int)(indice / pageSize) + 1;
+                        return pageNumber;
+                    }
+                }
+                return 1;
             }
 
             static string ShowMenuAndGetChoice()
@@ -191,7 +209,7 @@ namespace CacheApplicationConsole
                     Console.WriteLine("Insira um valor do tipo inteiro! \nQual o Id a ser deletado?: ");
                 }
 
-                string selectQuery = $"SELECT COUNT(*) FROM Pessoa WHERE Id = {id}";
+                string selectQuery = $"SELECT COUNT(*) FROM Pessoa WHERE Id = {id} AND Ativo = 1";
                 SqlCommand selecter = new SqlCommand(selectQuery, sqlConnection);
 
                 int count = (int)selecter.ExecuteScalar();
@@ -242,7 +260,13 @@ namespace CacheApplicationConsole
                     updateCommand.CommandText = updateQuery;
                     updateCommand.ExecuteNonQuery();
 
-                    RedisValue[] rangeList = redisDatabase.ListRange("PessoaList", 0, -1);
+                    Console.WriteLine("Valor Atualizado com Sucesso! \n");
+
+                    int paginationSize = 1000;
+                    int pageNumber = ObterNumeroPagina(redisDatabase, "PessoaList", "Id", id, paginationSize);
+                    int startIndex = (pageNumber - 1) * paginationSize;
+
+                    RedisValue[] rangeList = redisDatabase.ListRange("PessoaList", startIndex, (startIndex + paginationSize) - 1);
 
                     for (long indice = 0; indice < rangeList.Length; indice++)
                     {
@@ -275,12 +299,16 @@ namespace CacheApplicationConsole
                             var jsonValue = JsonConvert.SerializeObject(jsonObject);
 
 
-                            redisDatabase.ListSetByIndex($"PessoaList", indice, jsonValue);
+                            redisDatabase.ListSetByIndex($"PessoaList", startIndex + indice, jsonValue);
                             break;
                         }
                     }
 
                     sqlConnection.Close();
+                }
+                else
+                {
+                    Console.WriteLine("Id não encontrado \n");
                 }
             }
 
@@ -312,7 +340,11 @@ namespace CacheApplicationConsole
                     deleter.ExecuteNonQuery();
                     Console.WriteLine("\nRegistro excluído com sucesso! \n");
 
-                    RedisValue[] rangeList = redisDatabase.ListRange("PessoaList", 0, -1);
+                    int paginationSize = 1000;
+                    int pageNumber = ObterNumeroPagina(redisDatabase, "PessoaList", "Id", id, paginationSize);
+                    int startIndex = (pageNumber - 1) * paginationSize;
+
+                    RedisValue[] rangeList = redisDatabase.ListRange("PessoaList", startIndex, (startIndex + paginationSize) - 1);
 
                     // Iterar sobre os valores e procurar pelo ID desejado
                     for (long indice = 0; indice < rangeList.Length; indice++)
